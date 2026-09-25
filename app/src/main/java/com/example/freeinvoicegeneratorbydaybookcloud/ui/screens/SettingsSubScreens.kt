@@ -9,6 +9,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +28,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -27,6 +36,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -37,6 +48,8 @@ import com.example.freeinvoicegeneratorbydaybookcloud.ui.viewmodel.SettingsViewM
 import com.example.freeinvoicegeneratorbydaybookcloud.ui.viewmodel.ThemeMode
 import com.example.freeinvoicegeneratorbydaybookcloud.data.preferences.majorCurrencies
 import com.example.freeinvoicegeneratorbydaybookcloud.util.LogoResolver
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 
 @Composable
 fun OrganizationSettingsScreen(
@@ -239,16 +252,64 @@ fun TemplatesScreen(
     onTabSelected: (String) -> Unit = {}
 ) {
     val invoiceSettings by viewModel.invoiceSettings.collectAsStateWithLifecycle()
+    val remoteTemplates by viewModel.remoteTemplates.collectAsStateWithLifecycle()
     var templateSearchQuery by remember { mutableStateOf("") }
-    val templates = invoiceTemplateCatalog()
+    val templates = invoiceTemplateCatalog(remoteTemplates)
     val filteredTemplates = remember(templateSearchQuery, templates) {
         templates.filter { it.matchesSearch(templateSearchQuery) }
+    }
+    val pageSize = 10
+    var loadedTemplateCount by remember { mutableIntStateOf(pageSize) }
+    val visibleTemplates = filteredTemplates.take(loadedTemplateCount)
+    val pageLoading by viewModel.templatePageLoading.collectAsStateWithLifecycle()
+    val pageError by viewModel.templatePageError.collectAsStateWithLifecycle()
+    val catalogLoaded by viewModel.templateCatalogLoaded.collectAsStateWithLifecycle()
+    var displayMode by rememberSaveable { mutableStateOf(TemplateDisplayMode.LIST) }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val coroutineScope = rememberCoroutineScope()
+    val showScrollToTop by remember {
+        derivedStateOf {
+            if (displayMode == TemplateDisplayMode.GRID) {
+                gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
+            } else {
+                listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0
+            }
+        }
+    }
+
+    LaunchedEffect(templateSearchQuery, remoteTemplates) {
+        loadedTemplateCount = pageSize
+        listState.scrollToItem(0)
+        gridState.scrollToItem(0)
+    }
+    LaunchedEffect(displayMode, catalogLoaded, filteredTemplates.size) {
+        snapshotFlow {
+            val lastVisibleIndex = if (displayMode == TemplateDisplayMode.GRID) {
+                gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            } else {
+                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            }
+            Triple(lastVisibleIndex, pageLoading, loadedTemplateCount)
+        }.distinctUntilChanged().collect { (lastVisibleIndex, loading, loadedCount) ->
+            if (catalogLoaded && !loading && loadedCount < filteredTemplates.size &&
+                lastVisibleIndex >= loadedCount - 3
+            ) {
+                loadedTemplateCount = (loadedCount + pageSize).coerceAtMost(filteredTemplates.size)
+            }
+        }
+    }
+    LaunchedEffect(visibleTemplates, catalogLoaded) {
+        if (catalogLoaded) viewModel.loadTemplatePage(visibleTemplates.map { it.id })
     }
 
     SubScreenScaffold(
         title = "Invoice Templates",
         onBack = onBack,
+        scrollable = false,
+        showTopBar = !showBottomNavigation,
         showBack = !showBottomNavigation,
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 0.dp),
         bottomBar = {
             if (showBottomNavigation) {
                 DaybookBottomNavigation(
@@ -258,39 +319,118 @@ fun TemplatesScreen(
             }
         }
     ) {
+        if (showBottomNavigation) {
+            Text(
+                text = "Invoice Templates",
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+                fontSize = 29.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
         Text(
             text = "Choose your preferred invoice layout template.",
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = if (showBottomNavigation) TextAlign.Center else TextAlign.Start,
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        OutlinedTextField(
-            value = templateSearchQuery,
-            onValueChange = { templateSearchQuery = it },
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            label = { Text("Search templates") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            trailingIcon = {
-                if (templateSearchQuery.isNotBlank()) {
-                    IconButton(onClick = { templateSearchQuery = "" }) {
-                        Icon(Icons.Default.Close, contentDescription = "Clear template search")
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = templateSearchQuery,
+                onValueChange = { templateSearchQuery = it },
+                modifier = Modifier.weight(1f).height(56.dp),
+                singleLine = true,
+                placeholder = { Text("Search templates") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (templateSearchQuery.isNotBlank()) {
+                        IconButton(onClick = { templateSearchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear template search")
+                        }
                     }
                 }
-            }
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        if (filteredTemplates.isEmpty()) {
+            )
+            TemplateDisplayToggle(displayMode) { displayMode = it }
+        }
+        if (!catalogLoaded) {
+            CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+            Text("Loading template catalog…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else if (filteredTemplates.isEmpty()) {
             Text(
                 text = "No templates found.",
                 fontSize = 14.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
-            filteredTemplates.forEach { template ->
-                TemplateOptionCard(
-                    template = template,
-                    selected = invoiceSettings.templateId == template.id,
-                    onClick = { viewModel.selectInvoiceTemplate(template.id) }
+            pageError?.let { error ->
+                Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                TextButton(onClick = { viewModel.retryTemplatePage(visibleTemplates.map { it.id }) }) { Text("Retry") }
+            }
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                if (displayMode == TemplateDisplayMode.GRID) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier.fillMaxSize(),
+                        state = gridState,
+                        contentPadding = PaddingValues(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(visibleTemplates, key = { it.id }) { template ->
+                            TemplateGridCard(
+                                template = template,
+                                selected = invoiceSettings.templateId == template.id,
+                                onClick = { viewModel.selectInvoiceTemplate(template.id) },
+                                enabled = !pageLoading
+                            )
+                        }
+                        if (pageLoading && visibleTemplates.size < filteredTemplates.size) {
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        state = listState,
+                        contentPadding = PaddingValues(bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        items(visibleTemplates, key = { it.id }) { template ->
+                            TemplateOptionCard(
+                                template = template,
+                                selected = invoiceSettings.templateId == template.id,
+                                onClick = { viewModel.selectInvoiceTemplate(template.id) },
+                                enabled = !pageLoading
+                            )
+                        }
+                        if (pageLoading && visibleTemplates.size < filteredTemplates.size) {
+                            item {
+                                Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                                }
+                            }
+                        }
+                    }
+                }
+                TemplateScrollToTopButton(
+                    visible = showScrollToTop,
+                    onClick = {
+                        coroutineScope.launch {
+                            if (displayMode == TemplateDisplayMode.GRID) gridState.animateScrollToItem(0)
+                            else listState.animateScrollToItem(0)
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
                 )
             }
         }
@@ -301,12 +441,13 @@ fun TemplatesScreen(
 private fun TemplateOptionCard(
     template: InvoiceTemplateCatalogItem,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    enabled: Boolean = true
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = template.settingsContainerColor),
         border = androidx.compose.foundation.BorderStroke(
@@ -321,71 +462,46 @@ private fun TemplateOptionCard(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TemplatePreview(accent = template.accentColor)
+            TemplatePreview(accent = template.accentColor, large = true)
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = template.title,
+                    text = if (template.id == "modern_teal") "${template.title} (Default)" else template.title,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = template.description,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (template.id == "modern_teal") {
+                    Surface(
+                        color = template.accentColor.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Text(
+                            text = "Default",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            color = template.accentColor,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
             }
-            if (selected) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Selected",
-                    tint = template.accentColor,
-                    modifier = Modifier.size(24.dp)
-                )
-            } else {
-                RadioButton(
-                    selected = false,
-                    onClick = onClick,
-                    colors = RadioButtonDefaults.colors(selectedColor = template.accentColor)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TemplatePreview(accent: Color) {
-    Column(
-        modifier = Modifier
-            .width(68.dp)
-            .height(86.dp)
-            .padding(1.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(10.dp)
-                .background(accent, RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
-        )
-        repeat(3) { index ->
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(if (index == 0) 0.85f else 0.62f + index * 0.12f)
-                    .height(7.dp)
-                    .background(accent.copy(alpha = 0.20f), RoundedCornerShape(50))
+            RadioButton(
+                selected = selected,
+                onClick = onClick,
+                enabled = enabled,
+                colors = RadioButtonDefaults.colors(selectedColor = template.accentColor)
             )
         }
-        Spacer(modifier = Modifier.weight(1f))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.72f)
-                .height(9.dp)
-                .align(Alignment.End)
-                .background(accent.copy(alpha = 0.55f), RoundedCornerShape(50))
-        )
     }
 }
 
@@ -535,16 +651,21 @@ fun SubScreenScaffold(
     title: String,
     onBack: () -> Unit,
     showBack: Boolean = true,
+    scrollable: Boolean = true,
+    showTopBar: Boolean = true,
+    contentPadding: PaddingValues = PaddingValues(16.dp),
     bottomBar: @Composable () -> Unit = {},
     content: @Composable ColumnScope.() -> Unit
 ) {
     Scaffold(
         topBar = {
-            DaybookTopBar(
-                title = title,
-                onNavigationClick = if (showBack) onBack else null,
-                navigationIcon = Icons.AutoMirrored.Filled.ArrowBack
-            )
+            if (showTopBar) {
+                DaybookTopBar(
+                    title = title,
+                    onNavigationClick = if (showBack) onBack else null,
+                    navigationIcon = Icons.AutoMirrored.Filled.ArrowBack
+                )
+            }
         },
         bottomBar = bottomBar,
         containerColor = MaterialTheme.colorScheme.background
@@ -553,8 +674,8 @@ fun SubScreenScaffold(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+                .padding(contentPadding),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             content = content
         )

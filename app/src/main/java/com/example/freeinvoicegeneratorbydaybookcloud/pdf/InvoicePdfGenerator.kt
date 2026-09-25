@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.example.freeinvoicegeneratorbydaybookcloud.ui.viewmodel.InvoiceUiModel
+import com.example.freeinvoicegeneratorbydaybookcloud.data.template.RemoteInvoiceTemplateStore
 import com.example.freeinvoicegeneratorbydaybookcloud.util.LogoResolver
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -23,6 +24,8 @@ class InvoicePdfGenerator @Inject constructor(
 ) {
     suspend fun createSharePdf(invoice: InvoiceUiModel, templateId: String): Result<File> = pdfResult {
         withContext(Dispatchers.IO) {
+            RemoteInvoiceTemplateStore.load()
+            RemoteInvoiceTemplateStore.loadHtml(listOf(templateId)).getOrThrow()
             val directory = File(context.cacheDir, "invoices").apply { mkdirs() }
             val file = File(directory, safeFileName(invoice.invoiceNumber))
             val html = InvoiceHtmlRenderer.render(context, logoResolver, invoice, templateId)

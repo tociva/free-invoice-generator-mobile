@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.freeinvoicegeneratorbydaybookcloud.data.preferences.BusinessSettingsRepository
 import com.example.freeinvoicegeneratorbydaybookcloud.data.preferences.InvoiceSettingsRepository
+import com.example.freeinvoicegeneratorbydaybookcloud.data.template.RemoteInvoiceTemplateStore
 import com.example.freeinvoicegeneratorbydaybookcloud.domain.model.Customer
 import com.example.freeinvoicegeneratorbydaybookcloud.domain.model.DateFormatOption
 import com.example.freeinvoicegeneratorbydaybookcloud.domain.model.Invoice
@@ -46,7 +47,6 @@ class CreateInvoiceViewModel @Inject constructor(
     private val invoicePdfGenerator: InvoicePdfGenerator
 ) : ViewModel() {
     private var currentInvoiceSettings = invoiceSettingsRepository.settings.value
-    private var currentBusinessSettings = businessSettingsRepository.settings.value
     private var editingInvoice: Invoice? = null
 
     private val _uiState = MutableStateFlow(newState(InvoiceType.SIMPLE))
@@ -79,9 +79,19 @@ class CreateInvoiceViewModel @Inject constructor(
             invoiceSettingsRepository.settings.value.templateId
         )
 
+    internal val remoteTemplates = RemoteInvoiceTemplateStore.templates
+    internal val templateCatalogLoaded = RemoteInvoiceTemplateStore.catalogLoaded
+    private val _templatePageLoading = MutableStateFlow(false)
+    internal val templatePageLoading = _templatePageLoading.asStateFlow()
+    private val _templatePageError = MutableStateFlow<String?>(null)
+    internal val templatePageError = _templatePageError.asStateFlow()
+    private var loadedTemplatePageKey: String? = null
+    private var failedTemplatePageKey: String? = null
+
     private var lastSuggestedInvoiceNumber = "${currentInvoiceSettings.prefix}001"
 
     init {
+        viewModelScope.launch { runCatching { RemoteInvoiceTemplateStore.load() } }
         viewModelScope.launch {
             invoices.collect { saved ->
                 val next = nextInvoiceNumber(saved)
@@ -93,11 +103,6 @@ class CreateInvoiceViewModel @Inject constructor(
                     }
                 }
                 lastSuggestedInvoiceNumber = next
-            }
-        }
-        viewModelScope.launch {
-            businessSettingsRepository.settings.collect { settings ->
-                currentBusinessSettings = settings
             }
         }
         viewModelScope.launch {
@@ -124,6 +129,32 @@ class CreateInvoiceViewModel @Inject constructor(
         _editingInvoiceId.value = null
         _uiState.value = newState(type).copy(invoiceNumber = nextInvoiceNumber(invoices.value))
     }
+
+    internal fun loadTemplatePage(templateIds: List<String>) {
+        if (templateIds.isEmpty() || _templatePageLoading.value) return
+        val pageKey = templateIds.joinToString("|")
+        if (pageKey == loadedTemplatePageKey || pageKey == failedTemplatePageKey) return
+        viewModelScope.launch {
+            _templatePageLoading.value = true
+            _templatePageError.value = null
+            RemoteInvoiceTemplateStore.loadHtml(templateIds)
+                .onSuccess { loadedTemplatePageKey = pageKey; failedTemplatePageKey = null }
+                .onFailure {
+                    failedTemplatePageKey = pageKey
+                    _templatePageError.value = "Could not load these templates. Check your connection and retry."
+                }
+            _templatePageLoading.value = false
+        }
+    }
+
+    internal fun retryTemplatePage(templateIds: List<String>) {
+        failedTemplatePageKey = null
+        _templatePageError.value = null
+        loadTemplatePage(templateIds)
+    }
+
+    internal fun isTemplateLoaded(templateId: String): Boolean =
+        RemoteInvoiceTemplateStore.htmlFor(templateId) != null
 
     fun setStep(step: Int) {
         _uiState.update { it.copy(currentStep = step) }
@@ -594,11 +625,11 @@ class CreateInvoiceViewModel @Inject constructor(
 
     private fun newState(type: InvoiceType): CreateInvoiceUiState = CreateInvoiceUiState(
         invoiceType = type,
-        organizationName = "",
-        organizationAddress = "",
-        organizationEmail = "",
-        organizationMobile = "",
-        organizationLogoPath = null,
+        organizationName = businessSettingsRepository.settings.value.name,
+        organizationAddress = businessSettingsRepository.settings.value.address,
+        organizationEmail = businessSettingsRepository.settings.value.email,
+        organizationMobile = businessSettingsRepository.settings.value.phone,
+        organizationLogoPath = businessSettingsRepository.settings.value.logoPath,
         invoiceNumber = "${currentInvoiceSettings.prefix}001",
         currencyCode = currentInvoiceSettings.currencyCode,
         currencySymbol = currentInvoiceSettings.currency.symbol,

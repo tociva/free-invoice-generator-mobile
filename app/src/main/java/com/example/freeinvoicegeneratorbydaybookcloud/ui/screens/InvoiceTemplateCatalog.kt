@@ -3,7 +3,7 @@ package com.example.freeinvoicegeneratorbydaybookcloud.ui.screens
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.freeinvoicegeneratorbydaybookcloud.pdf.InvoiceTemplateAssets
+import com.example.freeinvoicegeneratorbydaybookcloud.data.template.RemoteInvoiceTemplate
 
 internal data class InvoiceTemplateCatalogItem(
     val id: String,
@@ -32,17 +32,21 @@ internal enum class InvoiceTemplateLayout {
     CORPORATE
 }
 
-internal fun invoiceTemplateCatalog(): List<InvoiceTemplateCatalogItem> {
+internal fun invoiceTemplateCatalog(remoteTemplates: List<RemoteInvoiceTemplate> = emptyList()): List<InvoiceTemplateCatalogItem> {
     val curated = curatedInvoiceTemplateCatalog()
     val curatedIds = curated.map { it.id }.toSet()
-    val uploaded = InvoiceTemplateAssets.all
-        .filterNot { it.id in curatedIds }
-        .map { asset ->
-            val accent = templateAccent(asset.id)
+    val remote = remoteTemplates
+        .filterNot { template ->
+            template.id in curatedIds || curated.any { it.title.equals(template.name, ignoreCase = true) }
+        }
+        .map { template ->
+            val accent = templateAccent(template.id)
             InvoiceTemplateCatalogItem(
-                id = asset.id,
-                title = asset.title,
-                description = "${asset.category} HTML template from assets.",
+                id = template.id,
+                title = template.name,
+                description = template.description.ifBlank {
+                    "${template.tags.joinToString(", ")} HTML template from Daybook.Cloud."
+                },
                 accentColor = accent,
                 settingsContainerColor = accent.copy(alpha = 0.10f),
                 headerColor = accent,
@@ -51,13 +55,13 @@ internal fun invoiceTemplateCatalog(): List<InvoiceTemplateCatalogItem> {
                 cardCornerRadius = 12.dp
             )
         }
-    return curated + uploaded
+    return curated + remote
 }
 
 private fun curatedInvoiceTemplateCatalog() = listOf(
     InvoiceTemplateCatalogItem(
         id = "modern_teal",
-        title = "Modern Teal (Default)",
+        title = "Modern Teal",
         description = "Clean minimal layout matching Daybook.Cloud brand identity.",
         accentColor = Color(0xFF0F8F83),
         settingsContainerColor = Color(0xFFE6FFFB),

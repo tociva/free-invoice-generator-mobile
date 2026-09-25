@@ -7,6 +7,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +28,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -28,6 +37,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.freeinvoicegeneratorbydaybookcloud.data.preferences.majorCurrencies
@@ -312,12 +323,57 @@ fun CreateInvoiceTemplateStepScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val selectedTemplateId by viewModel.selectedTemplateId.collectAsStateWithLifecycle()
+    val remoteTemplates by viewModel.remoteTemplates.collectAsStateWithLifecycle()
     val advanced = state.invoiceType == InvoiceType.ADVANCED
     var selected by remember(selectedTemplateId) { mutableStateOf(selectedTemplateId) }
     var templateSearchQuery by remember { mutableStateOf("") }
-    val templates = invoiceTemplateCatalog()
+    val templates = invoiceTemplateCatalog(remoteTemplates)
     val filteredTemplates = remember(templateSearchQuery, templates) {
         templates.filter { it.matchesSearch(templateSearchQuery) }
+    }
+    val pageSize = 10
+    var loadedTemplateCount by remember { mutableIntStateOf(pageSize) }
+    val visibleTemplates = filteredTemplates.take(loadedTemplateCount)
+    val pageLoading by viewModel.templatePageLoading.collectAsStateWithLifecycle()
+    val pageError by viewModel.templatePageError.collectAsStateWithLifecycle()
+    val catalogLoaded by viewModel.templateCatalogLoaded.collectAsStateWithLifecycle()
+    var displayMode by rememberSaveable { mutableStateOf(TemplateDisplayMode.LIST) }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val coroutineScope = rememberCoroutineScope()
+    val showScrollToTop by remember {
+        derivedStateOf {
+            if (displayMode == TemplateDisplayMode.GRID) {
+                gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
+            } else {
+                listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0
+            }
+        }
+    }
+
+    LaunchedEffect(templateSearchQuery, remoteTemplates) {
+        loadedTemplateCount = pageSize
+        listState.scrollToItem(0)
+        gridState.scrollToItem(0)
+    }
+    LaunchedEffect(displayMode, catalogLoaded, filteredTemplates.size) {
+        snapshotFlow {
+            val lastVisibleIndex = if (displayMode == TemplateDisplayMode.GRID) {
+                gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            } else {
+                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            }
+            Triple(lastVisibleIndex, pageLoading, loadedTemplateCount)
+        }.distinctUntilChanged().collect { (lastVisibleIndex, loading, loadedCount) ->
+            if (catalogLoaded && !loading && loadedCount < filteredTemplates.size &&
+                lastVisibleIndex >= loadedCount - 3
+            ) {
+                loadedTemplateCount = (loadedCount + pageSize).coerceAtMost(filteredTemplates.size)
+            }
+        }
+    }
+    LaunchedEffect(visibleTemplates, catalogLoaded) {
+        if (catalogLoaded) viewModel.loadTemplatePage(visibleTemplates.map { it.id })
     }
 
     WorkflowScaffold(
@@ -326,55 +382,102 @@ fun CreateInvoiceTemplateStepScreen(
         steps = if (advanced) advancedSteps else simpleSteps,
         onBack = onBack,
         nextLabel = "Create Invoice",
+        scrollable = false,
         onNext = {
             viewModel.selectInvoiceTemplate(selected)
             onFinish()
         }
     ) {
         FormCard("TEMPLATE") {
-            OutlinedTextField(
-                value = templateSearchQuery,
-                onValueChange = { templateSearchQuery = it },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                label = { Text("Search templates") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (templateSearchQuery.isNotBlank()) {
-                        IconButton(onClick = { templateSearchQuery = "" }) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear template search")
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = templateSearchQuery,
+                    onValueChange = { templateSearchQuery = it },
+                    modifier = Modifier.weight(1f).height(56.dp),
+                    singleLine = true,
+                    placeholder = { Text("Search templates") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (templateSearchQuery.isNotBlank()) {
+                            IconButton(onClick = { templateSearchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear template search")
+                            }
                         }
                     }
-                }
-            )
-            if (filteredTemplates.isEmpty()) {
+                )
+                TemplateDisplayToggle(displayMode) { displayMode = it }
+            }
+            if (!catalogLoaded) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                Text("Loading template catalog…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else if (filteredTemplates.isEmpty()) {
                 Text(
                     text = "No templates found.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp
                 )
             } else {
-                filteredTemplates.forEach { template ->
-                    OutlinedCard(
-                        onClick = { selected = template.id },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                pageError?.let { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                    TextButton(onClick = { viewModel.retryTemplatePage(visibleTemplates.map { it.id }) }) { Text("Retry") }
+                }
+                Box(modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 420.dp)) {
+                    if (displayMode == TemplateDisplayMode.GRID) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
+                            modifier = Modifier.fillMaxSize(),
+                            state = gridState,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            RadioButton(
-                                selected = selected == template.id,
-                                onClick = { selected = template.id }
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Text(template.title, fontWeight = FontWeight.SemiBold)
-                                Text(template.description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                            items(visibleTemplates, key = { it.id }) { template ->
+                                TemplateGridCard(
+                                    template = template,
+                                    selected = selected == template.id,
+                                    enabled = !pageLoading,
+                                    onClick = { selected = template.id }
+                                )
+                            }
+                            if (pageLoading && visibleTemplates.size < filteredTemplates.size) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            state = listState,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(visibleTemplates, key = { it.id }) { template ->
+                                WorkflowTemplateCard(template, selected, pageLoading) { selected = template.id }
+                            }
+                            if (pageLoading && visibleTemplates.size < filteredTemplates.size) {
+                                item {
+                                    Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                                    }
+                                }
                             }
                         }
                     }
+                    TemplateScrollToTopButton(
+                        visible = showScrollToTop,
+                        onClick = {
+                            coroutineScope.launch {
+                                if (displayMode == TemplateDisplayMode.GRID) gridState.animateScrollToItem(0)
+                                else listState.animateScrollToItem(0)
+                            }
+                        },
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
+                    )
                 }
             }
         }
@@ -384,7 +487,8 @@ fun CreateInvoiceTemplateStepScreen(
 @Composable
 private fun WorkflowScaffold(
     title: String, step: Int, steps: List<String>, onBack: () -> Unit, nextLabel: String,
-    onNext: () -> Unit, nextEnabled: Boolean = true, content: @Composable ColumnScope.() -> Unit
+    onNext: () -> Unit, nextEnabled: Boolean = true, scrollable: Boolean = true,
+    content: @Composable ColumnScope.() -> Unit
 ) {
     Scaffold(
         topBar = { DaybookTopBar(title, onBack, Icons.AutoMirrored.Filled.ArrowBack) },
@@ -397,8 +501,41 @@ private fun WorkflowScaffold(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             InvoiceStepIndicator(step, steps)
-            Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
+            Column(Modifier.fillMaxWidth().weight(1f)
+                .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+                .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp), content = content)
+        }
+    }
+}
+
+@Composable
+private fun WorkflowTemplateCard(
+    template: InvoiceTemplateCatalogItem,
+    selected: String,
+    loading: Boolean,
+    onSelected: () -> Unit
+) {
+    OutlinedCard(
+        onClick = onSelected,
+        enabled = !loading,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            RadioButton(
+                selected = selected == template.id,
+                onClick = onSelected,
+                enabled = !loading
+            )
+            Column(Modifier.weight(1f)) {
+                Text(template.title, fontWeight = FontWeight.SemiBold)
+                Text(template.description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            }
         }
     }
 }

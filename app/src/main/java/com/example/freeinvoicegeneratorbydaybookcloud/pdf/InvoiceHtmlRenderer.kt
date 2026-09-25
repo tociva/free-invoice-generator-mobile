@@ -3,6 +3,7 @@ package com.example.freeinvoicegeneratorbydaybookcloud.pdf
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Base64
+import com.example.freeinvoicegeneratorbydaybookcloud.data.template.RemoteInvoiceTemplateStore
 import com.example.freeinvoicegeneratorbydaybookcloud.ui.viewmodel.InvoiceUiModel
 import com.example.freeinvoicegeneratorbydaybookcloud.util.LogoResolver
 import com.example.freeinvoicegeneratorbydaybookcloud.util.amountInWords
@@ -10,11 +11,11 @@ import com.example.freeinvoicegeneratorbydaybookcloud.util.formatMoney
 import java.io.ByteArrayOutputStream
 
 internal object InvoiceHtmlRenderer {
-    private const val FALLBACK_TEMPLATE = "templates/tech-service/teal-flow-invoice-template.html"
-
     fun baseUrl(templateId: String): String {
-        val path = InvoiceTemplateAssets.pathFor(templateId) ?: FALLBACK_TEMPLATE
-        return "file:///android_asset/${path.substringBeforeLast('/')}/"
+        RemoteInvoiceTemplateStore.pathFor(templateId)?.let { path ->
+            return "https://free-invoice-generator-dev.daybook.cloud/${path.substringBeforeLast('/')}/"
+        }
+        return "https://free-invoice-generator-dev.daybook.cloud/"
     }
 
     fun render(
@@ -23,8 +24,8 @@ internal object InvoiceHtmlRenderer {
         invoice: InvoiceUiModel,
         templateId: String
     ): String {
-        val path = InvoiceTemplateAssets.pathFor(templateId) ?: FALLBACK_TEMPLATE
-        val template = context.assets.open(path).bufferedReader().use { it.readText() }
+        val template = RemoteInvoiceTemplateStore.htmlFor(templateId)
+            ?: error("Invoice template is not available. Connect to the internet and try again.")
         val logoSrc = logoDataUri(context, logoResolver, invoice.organizationLogoPath)
         val replacements = mapOf(
             "logo_small_src" to logoSrc,

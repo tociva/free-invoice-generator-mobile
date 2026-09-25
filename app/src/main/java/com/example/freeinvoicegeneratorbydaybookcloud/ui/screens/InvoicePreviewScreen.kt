@@ -60,6 +60,15 @@ fun InvoicePreviewScreen(
     val invoices by viewModel.invoices.collectAsStateWithLifecycle()
     val pdfActionState by viewModel.pdfActionState.collectAsStateWithLifecycle()
     val selectedTemplateId by viewModel.selectedTemplateId.collectAsStateWithLifecycle()
+    val catalogLoaded by viewModel.templateCatalogLoaded.collectAsStateWithLifecycle()
+    val templateLoading by viewModel.templatePageLoading.collectAsStateWithLifecycle()
+    val templateError by viewModel.templatePageError.collectAsStateWithLifecycle()
+    val templateLoaded = viewModel.isTemplateLoaded(selectedTemplateId)
+    LaunchedEffect(selectedTemplateId, catalogLoaded, templateLoading) {
+        if (catalogLoaded && !templateLoading && !templateLoaded) {
+            viewModel.loadTemplatePage(listOf(selectedTemplateId))
+        }
+    }
     val templateStyle = invoicePreviewTemplateStyle(selectedTemplateId)
     val invoice = invoices.firstOrNull { it.id == invoiceId }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
@@ -220,11 +229,23 @@ fun InvoicePreviewScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            HtmlInvoicePreview(
-                invoice = invoice,
-                templateId = selectedTemplateId,
-                modifier = Modifier.fillMaxWidth()
-            )
+            if (!catalogLoaded || templateLoading || !templateLoaded) {
+                if (templateError != null) {
+                    Text(templateError!!, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = { viewModel.retryTemplatePage(listOf(selectedTemplateId)) }) {
+                        Text("Retry template")
+                    }
+                } else {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                    Text("Loading invoice template…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                HtmlInvoicePreview(
+                    invoice = invoice,
+                    templateId = selectedTemplateId,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             if (false) {
             // ── Invoice Document Card ─────────────────────────────────
             Card(
