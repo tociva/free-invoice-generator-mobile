@@ -550,6 +550,7 @@ private fun rememberTimeBasedGreeting(): String {
         hour in 5..11 -> "GOOD MORNING"
         hour in 12..16 -> "GOOD AFTERNOON"
         hour in 17..20 -> "GOOD EVENING"
-        else -> "GOOD NIGHT"
+        else -> "GOOD EVENING"
     }
 }
+
