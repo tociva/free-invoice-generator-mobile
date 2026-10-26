@@ -63,7 +63,7 @@ Both Android and iOS run the same Compose Multiplatform app from the `shared` mo
 - JDK 17 or newer to launch Gradle (the configured daemon toolchain uses JDK 25 and can be provisioned automatically)
 - Android SDK 37
 - An emulator or physical device running Android 9 (API 28) or newer
-- macOS with Xcode 16 or newer for the iOS app
+- macOS with Xcode 26 or newer for App Store uploads
 - An iOS 17+ simulator or device
 
 The repository includes the Gradle wrapper, so a separate Gradle installation is not required.
@@ -131,7 +131,203 @@ xcodebuild \
   build
 ```
 
-Device and App Store builds require an Apple Developer team and signing configuration in Xcode.
+Device and App Store builds are covered in [Publishing](#publishing).
+
+## Publishing
+
+Store builds use the identifiers and versions already set in the project.
+
+| | Android | iOS |
+| --- | --- | --- |
+| Application ID | `com.tociva.freeinvoicegenerator` | `com.tociva.freeinvoicegenerator` |
+| Public version | `versionName` in `app/build.gradle.kts` (`1.0`) | `MARKETING_VERSION` in the Xcode project (`1.0`) |
+| Build number | `versionCode` in `app/build.gradle.kts` (`1`) | `CURRENT_PROJECT_VERSION` in the Xcode project (`1`) |
+
+### Versioning
+
+Version updates are **manual**. The build, archive, emulator, and upload commands do not change any version values.
+
+- For the first store upload, the current `1.0 (1)` values are valid if build `1` has not already been uploaded.
+- Before every later upload, increase the build number on that platform. Google Play and App Store Connect reject build numbers that were already uploaded.
+- Change the public version only when preparing a new customer-facing release, such as `1.0` to `1.1`.
+- Keep Android and iOS public versions aligned when they represent the same product release.
+- Prefer monotonically increasing build numbers across releases on both platforms to keep release history easy to follow.
+
+For Android, edit `app/build.gradle.kts`:
+
+```kotlin
+defaultConfig {
+    versionCode = 2
+    versionName = "1.0"
+}
+```
+
+For iOS, open the `FreeInvoiceGenerator` target in Xcode and update **General → Identity → Version** and **Build**. This updates `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` for the target's build configurations.
+
+An example release sequence:
+
+| Upload | Public version | Build number |
+| --- | --- | --- |
+| First production candidate | `1.0` | `1` |
+| Corrected `1.0` candidate | `1.0` | `2` |
+| Next feature release | `1.1` | `3` |
+
+Commit version changes before generating the store artifacts so the repository records exactly which source produced each upload.
+
+### Google Play
+
+Play Console accepts an Android App Bundle (`.aab`) signed with your upload key. Google Play App Signing then re-signs the app for users. A signed release APK is the same build, packaged so you can install it locally.
+
+Create the upload keystore once, outside the repository, and keep the file and passwords. Losing this keystore blocks later updates if the app is not enrolled in Play App Signing.
+
+```bash
+keytool -genkeypair -v \
+  -keystore "$HOME/keystores/free-invoice-generator-upload.keystore" \
+  -alias upload \
+  -keyalg RSA \
+  -keysize 2048 \
+  -validity 10000
+```
+
+Add the keystore path and passwords to `keystore.properties` in the repository root. That file is gitignored. Do not commit it or the `.keystore` file.
+
+```properties
+storeFile=/absolute/path/to/free-invoice-generator-upload.keystore
+storePassword=your-store-password
+keyAlias=upload
+keyPassword=your-key-password
+```
+
+`app/build.gradle.kts` reads that file and signs the release build with it. PKCS12 keystores use the same value for `storePassword` and `keyPassword`.
+
+Build both artifacts:
+
+```bash
+bash gradlew bundleRelease assembleRelease
+```
+
+| Artifact | Path |
+| --- | --- |
+| Play Console upload | `app/build/outputs/bundle/release/app-release.aab` |
+| Signed release APK | `app/build/outputs/apk/release/app-release.apk` |
+
+In Play Console, create the app with package name `com.tociva.freeinvoicegenerator`, enroll in Play App Signing, and upload `app-release.aab` to a testing track before production.
+
+### App Store
+
+The simulator `.app` produced by `bash scripts/build-ios.sh` cannot be uploaded to the App Store. Transporter requires a signed `.ipa` built for physical iOS devices with the App Store distribution method.
+
+Before starting, make sure you have:
+
+- An active Apple Developer Program membership
+- Xcode 26 or newer and the [Transporter app](https://apps.apple.com/app/transporter/id1450874784) installed on macOS
+- The appropriate Account Holder, Admin, App Manager, or Developer access in App Store Connect
+- A unique build number in `CURRENT_PROJECT_VERSION`; increase it before every upload
+
+#### 1. Create the App Store Connect record
+
+Before uploading the first build, open [App Store Connect](https://appstoreconnect.apple.com/), go to **Apps**, click **+**, and select **New App**. Use:
+
+| Field | Value |
+| --- | --- |
+| Platform | iOS |
+| Name | Free Invoice Generator |
+| Bundle ID | `com.tociva.freeinvoicegenerator` |
+| SKU | A unique internal value, such as `free-invoice-generator-ios` |
+
+The bundle ID must exactly match the Xcode target. Apple documents the complete process in [Add a new app](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app/).
+
+#### 2. Configure signing
+
+Open `ios/FreeInvoiceGenerator.xcodeproj`, select the `FreeInvoiceGenerator` target, and open **Signing & Capabilities**. Confirm that:
+
+- **Automatically manage signing** is enabled.
+- The correct Apple Developer team is selected.
+- The bundle identifier is `com.tociva.freeinvoicegenerator`.
+- A valid Apple Distribution certificate and App Store provisioning profile are available.
+
+The project currently has a development team configured. If building for a different team, replace `YOUR_TEAM_ID` below with that team's 10-character ID. `-allowProvisioningUpdates` allows Xcode to create or download required signing assets.
+
+#### 3. Create a signed archive
+
+From Xcode, select **Any iOS Device (arm64)** and choose **Product → Archive**. Alternatively, archive from Terminal:
+
+```bash
+xcodebuild \
+  -project ios/FreeInvoiceGenerator.xcodeproj \
+  -scheme FreeInvoiceGenerator \
+  -configuration Release \
+  -destination 'generic/platform=iOS' \
+  -archivePath build/ios/FreeInvoiceGenerator.xcarchive \
+  -allowProvisioningUpdates \
+  DEVELOPMENT_TEAM=YOUR_TEAM_ID \
+  CODE_SIGN_STYLE=Automatic \
+  MARKETING_VERSION=1.0.1 \
+  CURRENT_PROJECT_VERSION=3 \
+  archive
+```
+
+The archive is written to `build/ios/FreeInvoiceGenerator.xcarchive`.
+
+#### 4. Export the App Store IPA
+
+Create `ios/ExportOptions.plist` using the following content. Replace `YOUR_TEAM_ID` with the same Apple Developer team ID. This file is gitignored and must not be committed.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>teamID</key>
+    <string>YOUR_TEAM_ID</string>
+    <key>uploadSymbols</key>
+    <true/>
+    <key>signingStyle</key>
+    <string>automatic</string>
+</dict>
+</plist>
+```
+
+Export the signed `.ipa`:
+
+```bash
+xcodebuild \
+  -exportArchive \
+  -archivePath build/ios/FreeInvoiceGenerator.xcarchive \
+  -exportPath build/ios/export \
+  -exportOptionsPlist ios/ExportOptions.plist
+```
+
+The signed IPA is written under `build/ios/export/`. Confirm it exists before opening Transporter:
+
+```bash
+find build/ios/export -maxdepth 1 -name '*.ipa' -print
+```
+
+#### 5. Upload with Transporter
+
+1. Open **Transporter** and sign in with the Apple ID associated with the App Store Connect account.
+2. Select the correct provider if the account belongs to more than one App Store Connect organization.
+3. Drag the exported `.ipa` from `build/ios/export/` into the Transporter window, or click **+** and select it.
+4. Click **Deliver**. Transporter validates the package before uploading it.
+5. Wait until the delivery moves to **Delivered**. If delivery fails, open **Issues** or **View Delivery Log**, fix every error, increase the build number when required, archive/export again, and retry.
+
+Apple's [Transporter guide](https://support.apple.com/en-in/guide/transporter-app/apda158c5f7c/mac) covers delivery status, warnings, and logs. Warnings may not prevent delivery, but errors do.
+
+#### 6. Finish in App Store Connect
+
+After delivery, Apple processes the build before it appears in App Store Connect. Processing is asynchronous, and Apple sends an email when it completes.
+
+1. Open the app in App Store Connect and check **TestFlight** for the processed build.
+2. Resolve any **Missing Compliance** questions, including export-compliance information.
+3. Test the build with internal TestFlight testers before release.
+4. Open the iOS app version under **Distribution**, complete the required metadata, privacy details, screenshots, age rating, pricing, and availability.
+5. In the **Build** section, click **+**, select the processed build, and save.
+6. Complete the App Review information and click **Add for Review**, then submit the version.
+
+See Apple's current [upload-build guidance](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/) and [build-selection steps](https://developer.apple.com/help/app-store-connect/manage-builds/choose-a-build-to-submit/). The bundle ID, marketing version, and build number in the uploaded binary determine which App Store Connect record and version receive the build.
 
 ## Opening the apps in emulators
 

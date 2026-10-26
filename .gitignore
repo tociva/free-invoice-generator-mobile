@@ -16,3 +16,20 @@
 .externalNativeBuild
 .cxx
 local.properties
+.env
+
+
+keystore.properties
+*.keystore
+*.jks
+ios/ExportOptions.plist
+
+# Xcode / iOS generated files
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.mobileprovision
