@@ -25,6 +25,11 @@ val OnSurfaceLight   = Color(0xFF111827)
 val OnSurfaceVariant = Color(0xFF5A6A7E)
 val OutlineLight     = Color(0xFFD1D9E0)
 
+// Template cards intentionally keep their light pastel backgrounds in both
+// themes, so their foregrounds must not inherit dark-mode light text.
+val TemplateCardTitle       = Color(0xFF102A43)
+val TemplateCardDescription = Color(0xFF486581)
+
 // Dark mode surfaces
 val BackgroundDark   = Color(0xFF0D1117)
 val SurfaceDark      = Color(0xFF161B22)

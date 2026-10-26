@@ -38,6 +38,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.freeinvoicegeneratorbydaybookcloud.ui.components.DaybookBottomNavigation
 import com.example.freeinvoicegeneratorbydaybookcloud.ui.components.DaybookTopBar
 import com.example.freeinvoicegeneratorbydaybookcloud.ui.components.PrimaryButton
+import com.example.freeinvoicegeneratorbydaybookcloud.ui.theme.TemplateCardDescription
+import com.example.freeinvoicegeneratorbydaybookcloud.ui.theme.TemplateCardTitle
 import com.example.freeinvoicegeneratorbydaybookcloud.ui.viewmodel.SettingsViewModel
 import com.example.freeinvoicegeneratorbydaybookcloud.ui.viewmodel.ThemeMode
 import com.example.freeinvoicegeneratorbydaybookcloud.data.preferences.majorCurrencies
@@ -463,7 +465,7 @@ private fun TemplateOptionCard(
                     fontSize = 15.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = TemplateCardTitle
                 )
                 Text(
                     text = template.description,
@@ -471,7 +473,7 @@ private fun TemplateOptionCard(
                     lineHeight = 18.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = TemplateCardDescription
                 )
                 if (template.id == "modern_teal") {
                     Surface(
@@ -481,7 +483,7 @@ private fun TemplateOptionCard(
                         Text(
                             text = "Default",
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            color = template.accentColor,
+                            color = TemplateCardTitle,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -492,7 +494,11 @@ private fun TemplateOptionCard(
                 selected = selected,
                 onClick = onClick,
                 enabled = enabled,
-                colors = RadioButtonDefaults.colors(selectedColor = template.accentColor)
+                colors = RadioButtonDefaults.colors(
+                    selectedColor = template.accentColor,
+                    unselectedColor = MaterialTheme.colorScheme.outline,
+                    disabledUnselectedColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+                )
             )
         }
     }
